@@ -1,0 +1,69 @@
+name: Release
+
+# Builds the package and attaches it to a GitHub Release named after the
+# version in package.json, the first time main carries that version. This is
+# how StreamVessel consumes the fork: it installs the release asset by URL.
+# Nothing is published to npm.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version not yet released?
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "v$version is already released"
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.version.outputs.new == 'true'
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Build, check and pack
+        if: steps.version.outputs.new == 'true'
+        run: |
+          npm ci
+          npm run build
+          npm run typecheck
+          npm test
+          npm pack
+
+      - name: Create the release
+        if: steps.version.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          file="avbridge-$VERSION.tgz"
+          sha=$(sha256sum "$file" | cut -d' ' -f1)
+          {
+            echo "Install with:"
+            echo
+            echo '    pnpm add https://github.com/${{ github.repository }}/releases/download/v'"$VERSION/$file"
+            echo
+            echo "SHA-256 \`$sha\`. Changes: see CHANGELOG.md."
+          } > notes.md
+          gh release create "v$VERSION" "$file" --target "$GITHUB_SHA" --title "v$VERSION" --notes-file notes.md

@@ -1,16 +1,16 @@
 {
   "name": "avbridge",
-  "version": "2.13.0",
+  "version": "2.13.0-sv.1",
   "description": "Play and convert arbitrary video files in the browser. Native, remux, hybrid, fallback, and transcode — one API.",
   "license": "MIT",
   "author": "Keishi Hattori",
-  "homepage": "https://github.com/keishi/avbridge#readme",
+  "homepage": "https://github.com/streamvessel/avbridge#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/keishi/avbridge.git"
+    "url": "git+https://github.com/streamvessel/avbridge.git"
   },
   "bugs": {
-    "url": "https://github.com/keishi/avbridge/issues"
+    "url": "https://github.com/streamvessel/avbridge/issues"
   },
   "keywords": [
     "media-player",

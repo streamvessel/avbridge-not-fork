@@ -1,8 +1,7 @@
 name: Deploy Demo to GitHub Pages
 
+# Manual only: the fork has no GitHub Pages site of its own.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

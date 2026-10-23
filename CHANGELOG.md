@@ -4,6 +4,34 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0-sv.1]
+
+StreamVessel's fork (streamvessel/avbridge) of 2.13.0. Released as a GitHub Release
+asset, not on npm.
+
+### Fixed
+
+- **A stalled Range read stopped every later video on the page.** libav.js runs one
+  call at a time per instance, and every probe and decoder shared one instance. Each
+  now creates its own (`createLibav`) and releases it (`releaseLibav`), which ends a
+  read stuck in it; the HTTP reader aborts its fetch on detach.
+- **Every file after a played one trapped "memory access out of bounds".** Teardown
+  freed packets and the mpeg4 bitstream filter with `av_packet_free`/`av_bsf_free`,
+  which take the pointer's address; it now uses the `_js` forms.
+- **SD colours** (BT.601, nearly every AVI) were read as BT.709, and the **pixel aspect
+  ratio** was ignored. The fallback decoder builds planar YUV `VideoFrame`s itself,
+  tagged BT.601 below 720 lines, BT.709 from 720.
+- **Sound dropped out** when software decode fell behind: video frames are now shed
+  (`createFrameShedder`) once the audio buffer runs low.
+- `destroy()` waits for a bootstrap in flight and releases the document listeners a
+  following disconnect skipped.
+- Touch: a tap no longer flashes the controls away, and the unseen play button no
+  longer pauses a playing video.
+
+### Added
+
+- **Camera AVIs**: the avbridge libav variant decodes Motion JPEG, DV, PCM and ADPCM.
+
 ## [2.13.0]
 
 Post-seek fast-forward fix on the fallback path, plus seekbar UX
