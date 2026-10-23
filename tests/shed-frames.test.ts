@@ -18,7 +18,7 @@ const frames = (from: number, n: number, keyEvery = 0): Pkt[] =>
   Array.from({ length: n }, (_, i) => ({ pts: from + i / 10, flags: keyEvery && i % keyEvery === 0 ? 1 : 0 }));
 
 function shedder(intraOnly: boolean, c: SheddingClock) {
-  return createFrameShedder({ intraOnly, fps: 10, clock: c, ptsSec: (p) => (p as Pkt).pts });
+  return createFrameShedder<Pkt>({ intraOnly, fps: 10, clock: c, ptsSec: (p) => p.pts });
 }
 
 describe("createFrameShedder", () => {

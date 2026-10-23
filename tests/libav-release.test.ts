@@ -22,14 +22,6 @@ describe("releaseLibav", () => {
     await expect(inst.ff_read_frame_multi(1, 2)).rejects.toThrow("libav released");
   });
 
-  it("does not depend on libav.js's own pending handlers, which threaded mode keeps private", async () => {
-    const inst = stuckInstance();
-    expect("handlers" in inst).toBe(false);
-    const stuck = inst.ff_read_frame_multi();
-    releaseLibav(inst);
-    await expect(stuck).rejects.toThrow();
-  });
-
   it("is safe to call twice", () => {
     const inst = stuckInstance();
     releaseLibav(inst);

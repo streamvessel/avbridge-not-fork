@@ -18,9 +18,10 @@ libswscale) for WebAssembly. These binaries live in
 - FFmpeg legal notice: https://ffmpeg.org/legal.html
 - License: **GNU Lesser General Public License version 2.1 or later**
 
-The full LGPL-2.1 license text ships beside the binary, as
-`vendor/libav/avbridge/COPYING.LGPLv2.1` (FFmpeg's own copy), so an app that
-serves that folder serves the licence with it. It is also at
+The full LGPL-2.1 license text ships beside the binaries, as
+`COPYING.LGPLv2.1` (FFmpeg's own copy) in both `vendor/libav/avbridge/` and
+`vendor/libav/webcodecs/`, so an app that serves either folder serves the
+licence with it. It is also at
 https://www.gnu.org/licenses/old-licenses/lgpl-2.1.en.html.
 
 ### Your obligations if you redistribute avbridge
@@ -41,19 +42,20 @@ version. avbridge satisfies this requirement in three ways:
    playback and avbridge will load libav from your path instead of the
    bundled default. This is the documented replaceability hook.
 
-3. **The build is reproducible.** `scripts/build-libav.sh` in the
-   avbridge repository builds the exact `avbridge` variant bundled in
-   this package. It downloads the pinned libav.js source, applies the
-   fragment list documented in `vendor/libav/README.md`, and writes the
-   output to `vendor/libav/avbridge/`. Running it gives you the same
-   bytes that ship in the npm tarball.
+3. **The build can be rebuilt.** `scripts/build-libav.sh` in the
+   avbridge repository builds the `avbridge` variant bundled in this
+   package. It downloads the pinned libav.js source, applies the fragment
+   list documented in `vendor/libav/README.md`, and writes the output to
+   `vendor/libav/avbridge/`. emscripten's output is not bit-identical
+   from one build to the next, so a rebuild matches the shipped binary in
+   source and configuration, not byte for byte.
 
 If you need the upstream libav.js / FFmpeg source code that corresponds
 to the bundled binaries, either run `./scripts/build-libav.sh` (which
 downloads it) or obtain it directly from
 https://github.com/Yahweasel/libav.js and https://ffmpeg.org/download.html.
 You may also open an issue at
-https://github.com/keishi/avbridge/issues and a source archive matching
+https://github.com/streamvessel/avbridge/issues and a source archive matching
 the shipped binaries will be provided.
 
 ---
@@ -117,4 +119,4 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 If anything here is unclear, or you need a specific form of compliance
 material (source tarballs, signed attestations, build reproducibility
-evidence), open an issue at https://github.com/keishi/avbridge/issues.
+evidence), open an issue at https://github.com/streamvessel/avbridge/issues.

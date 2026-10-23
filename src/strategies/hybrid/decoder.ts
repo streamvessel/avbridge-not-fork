@@ -278,7 +278,7 @@ async function startHybridDecoderOn(libav: LibavRuntime, opts: StartHybridDecode
           limit: 16 * 1024,
         });
       } catch (err) {
-        console.error("[avbridge] hybrid ff_read_frame_multi failed:", err);
+        if (!destroyed) console.error("[avbridge] hybrid ff_read_frame_multi failed:", err);
         return;
       }
 
@@ -705,8 +705,6 @@ interface LibavRuntime {
   ): Promise<LibavFrame[]>;
   ff_free_decoder?(c: number, pkt: number, frame: number): Promise<void>;
   av_packet_alloc(): Promise<number>;
-  /** Takes the packet; plain av_packet_free takes its address, as FFmpeg's does. */
-  av_packet_free_js(pkt: number): Promise<void>;
   av_seek_frame(
     fmt_ctx: number,
     stream: number,
@@ -715,7 +713,6 @@ interface LibavRuntime {
     flags: number,
   ): Promise<number>;
   avcodec_flush_buffers?(c: number): Promise<void>;
-  avformat_close_input_js(ctx: number): Promise<void>;
   f64toi64?(val: number): [number, number];
 
   // BSF methods
@@ -726,8 +723,6 @@ interface LibavRuntime {
   av_bsf_send_packet(ctx: number, pkt: number): Promise<number>;
   av_bsf_receive_packet(ctx: number, pkt: number): Promise<number>;
   av_bsf_flush?(ctx: number): Promise<void>;
-  /** Takes the context; plain av_bsf_free takes its address. */
-  av_bsf_free_js(ctx: number): Promise<void>;
   ff_copyin_packet(pktPtr: number, packet: LibavPacket): Promise<void>;
   ff_copyout_packet(pkt: number): Promise<LibavPacket>;
 }

@@ -27,18 +27,11 @@ import { dbg } from "../../util/debug.js";
 export type LibavVariant = "webcodecs" | "default" | "avbridge";
 
 export interface LoadLibavOptions {
-  /**
-   * Force threading on/off for this load. If unspecified, defaults to
-   * "true if `crossOriginIsolated`, otherwise false". Some libav.js code
-   * paths (notably the cross-thread reader-device protocol used during
-   * `avformat_find_stream_info` for AVI) are unreliable in threaded mode,
-   * so probing forces this to `false` while decode keeps it default.
-   */
+  /** Force threading on/off for this load; see `wantsThreads()` for the default. */
   threads?: boolean;
 }
 
-// Cache key includes both variant and threading mode so probe and decode
-// can run different libav instances of the same variant.
+// loadLibav's shared instances, by variant and threading mode.
 const cache: Map<string, Promise<LibavInstance>> = new Map();
 // The variant's module, imported once whatever number of instances it makes.
 const modules: Map<string, Promise<LoadedVariant>> = new Map();
@@ -47,6 +40,21 @@ function cacheKey(variant: LibavVariant, threads: boolean): string {
   return `${variant}:${threads ? "thr" : "wasm"}`;
 }
 
+// Threading is OFF by default. The threaded libav.js variant is too
+// fragile in practice for our usage:
+//   - Probe (`avformat_find_stream_info` for AVI) throws an `undefined`
+//     exception out of `ff_init_demuxer_file`, apparently due to the
+//     cross-thread reader-device protocol racing with the main thread.
+//   - Decode hits a `TypeError: Cannot read properties of undefined
+//     (reading 'apply')` inside libav.js's own worker message handler
+//     within seconds of starting — a bug in libav.js's threaded message
+//     dispatch that we can't fix from outside.
+//
+// Performance work for the fallback strategy needs to come from elsewhere
+// (WASM SIMD, OffscreenCanvas, larger decode batches) instead of libav's
+// pthreads. Threading can still be force-enabled with
+// `globalThis.AVBRIDGE_LIBAV_THREADS = true` for testing if libav.js fixes
+// those bugs in a future release.
 function wantsThreads(opts: LoadLibavOptions): boolean {
   const env = globalThis as { AVBRIDGE_LIBAV_THREADS?: boolean };
   return opts.threads !== undefined ? opts.threads : env.AVBRIDGE_LIBAV_THREADS === true;
@@ -108,8 +116,9 @@ const inFlight = new WeakMap<object, Set<(err: Error) => void>>();
  * Wraps the one function every libav.js method posts through (`c`, in the worker and the
  * threaded wrappers alike) to keep each call's rejecter, so releaseLibav can fail them. libav.js
  * keeps its own pending handlers where nothing outside can reach them in threaded mode.
+ *
+ * @internal Exported for unit tests.
  */
-/** @internal Exported for unit tests. */
 export function trackCalls(libav: unknown): void {
   const inst = libav as { c?: (...args: unknown[]) => Promise<unknown> };
   const call = inst.c;
@@ -160,6 +169,11 @@ function loadModule(variant: LibavVariant): Promise<{ mod: LoadedVariant; base: 
 async function importVariant(variant: LibavVariant, base: string, variantUrl: string): Promise<LoadedVariant> {
   dbg.info("libav-load", `fetching ${variantUrl}`);
 
+  // Preflight HEAD-ish check: issue a bytes=0-0 range request so a missing
+  // file fails fast with a clear error instead of hanging deep inside the
+  // dynamic import or inside libav's own WASM instantiation. Surfaces the
+  // most common mistake ("libav base path is wrong") in <100 ms instead of
+  // an indeterminate stall.
   if (typeof fetch === "function") {
     try {
       const head = await fetch(variantUrl, { method: "GET", headers: { Range: "bytes=0-0" } });
@@ -222,10 +236,7 @@ async function silenceLibavLogs(inst: LibavInstance): Promise<void> {
 }
 
 function buildOpts(base: string, wantThreads: boolean): Record<string, unknown> {
-  // The wantThreads decision is made by `loadLibav()` so callers (probe,
-  // decoder) can override per-load. Decode wants pthreads for speed; probe
-  // forces them off because libav.js's cross-thread reader-device protocol
-  // is unreliable mid-`avformat_find_stream_info` for some AVI files.
+  // wantThreads comes from wantsThreads().
   return {
     base,
     nothreads: !wantThreads,

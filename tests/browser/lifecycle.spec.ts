@@ -11,7 +11,7 @@
  * its own, released when it is done.
  */
 import { test, expect, type Route } from "@playwright/test";
-import { close, fixture, mount, player, playsFrames, type Player } from "./_player.js";
+import { attach, closesWithin, fixture, mount, openHarness, player, playsFrames, type Player } from "./_player.js";
 
 test.skip(({ browserName }) => browserName !== "chromium", "lifecycle, not strategy");
 test.setTimeout(90_000);
@@ -19,10 +19,8 @@ test.setTimeout(90_000);
 const LONG = "bbb-mpeg4-mp3.avi"; // 30 s, read in many Range requests as it plays
 const CAMERA = "mjpeg-pcm.avi";
 
-test.beforeEach(async ({ page }) => {
-  await page.goto("/tests-harness.html");
-  await page.waitForFunction(() => (window as unknown as { __avbridgeReady?: boolean }).__avbridgeReady === true);
-});
+test.beforeEach(({ page }) => openHarness(page));
+
 test("a stalled read stops neither the next video nor the stalled one later", async ({ page }) => {
   await mount(page, fixture(LONG));
   await playsFrames(page);
@@ -33,11 +31,11 @@ test("a stalled read stops neither the next video nor the stalled one later", as
   await player(page).evaluate((el) => { (el as Player).currentTime = 25; });
   await expect.poll(() => stalled.length, { timeout: 10_000 }).toBeGreaterThan(0);
 
-  expect(await close(page, 5_000), "destroy() should not wait on a stalled read").toBeGreaterThanOrEqual(0);
+  expect(await closesWithin(page, 5_000), "destroy() should not wait on a stalled read").toBe(true);
 
   await mount(page, fixture(CAMERA));
   await playsFrames(page);
-  await close(page, 5_000);
+  expect(await closesWithin(page, 5_000)).toBe(true);
 
   await page.unroute(`**/${LONG}`);
   await Promise.all(stalled.map((r) => r.abort().catch(() => undefined)));
@@ -50,15 +48,10 @@ test("a file whose reads stall while it opens can still be closed, and the next 
   const stalled: Route[] = [];
   let reads = 0;
   await page.route(`**/${LONG}`, (route) => (reads++ === 0 ? route.continue() : void stalled.push(route)));
-  await page.evaluate((src) => {
-    const el = document.createElement("avbridge-player") as Player;
-    el.muted = true;
-    document.getElementById("player-mount")!.appendChild(el);
-    el.src = src;
-  }, fixture(LONG));
+  await attach(page, fixture(LONG));
   await expect.poll(() => stalled.length, { timeout: 10_000 }).toBeGreaterThan(0);
 
-  expect(await close(page, 5_000), "destroy() should not wait on a stalled open").toBeGreaterThanOrEqual(0);
+  expect(await closesWithin(page, 5_000), "destroy() should not wait on a stalled open").toBe(true);
 
   await mount(page, fixture(CAMERA));
   await playsFrames(page);
@@ -72,19 +65,21 @@ test("plays after many players opened and closed, some before they were ready", 
     const file = files[round % files.length];
     if (round % 3 === 2) {
       // Closed while still opening.
-      void page.evaluate((src) => {
-        const el = document.createElement("avbridge-player") as Player;
-        el.muted = true;
-        document.getElementById("player-mount")!.appendChild(el);
-        el.src = src;
-      }, fixture(file));
+      await attach(page, fixture(file));
       await page.waitForTimeout(150);
     } else {
       await mount(page, fixture(file));
       await playsFrames(page);
     }
-    expect.soft(await close(page, 5_000), `round ${round}: destroy() settled`).toBeGreaterThanOrEqual(0);
+    expect.soft(await closesWithin(page, 5_000), `round ${round}: destroy() settled`).toBe(true);
   }
   await mount(page, fixture(LONG));
+  await playsFrames(page);
+});
+
+test("plays by URL where AbortSignal.any is missing, as before Safari 17.4", async ({ page }) => {
+  await page.addInitScript(() => { delete (AbortSignal as { any?: unknown }).any; });
+  await openHarness(page);
+  await mount(page, fixture(CAMERA));
   await playsFrames(page);
 });

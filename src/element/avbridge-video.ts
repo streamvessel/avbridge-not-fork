@@ -273,12 +273,8 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
   disconnectedCallback(): void {
     if (this._destroyed) return;
     this._releaseDocumentHooks();
-    // Bump the bootstrap token so any in-flight async work is invalidated
-    // before we tear down. _teardown() also bumps but we want the bump to
-    // happen synchronously here so any awaited promise that resolves
-    // between `disconnect` and `_teardown` sees the new ID.
-    this._bootstrapId++;
-    void this._teardown();
+    // _teardown() bumps the bootstrap id synchronously, before its first await.
+    void this._track(this._teardown());
   }
 
   /**
@@ -412,8 +408,7 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     const source = this._activeSource();
     if (source == null) {
       // Null transition: tear down and stay idle.
-      this._bootstrapId++;
-      void this._teardown();
+      void this._track(this._teardown());
       return;
     }
     // Only bootstrap if we're connected to the DOM.
@@ -424,8 +419,11 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   // ── Bootstrap (the only place a UnifiedPlayer is created) ──────────────
 
-  /** Settles when every bootstrap started has finished, a player one made after destroy included. */
-  private _booting: Promise<void> = Promise.resolve();
+  /**
+   * Settles when every bootstrap and teardown started has finished, a player a bootstrap made
+   * after destroy included. destroy() waits for it.
+   */
+  private _settling: Promise<void> = Promise.resolve();
   /**
    * Aborts every request of the current bootstrap and of the player it makes: the sniff, the
    * probe's reads and the decoder's. Teardown fires it, so a bootstrap stalled on the network
@@ -434,9 +432,13 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
   private _bootAbort: AbortController | null = null;
 
   private _bootstrap(source: MediaInput): Promise<void> {
-    const run = this._runBootstrap(source);
-    this._booting = Promise.all([this._booting, run.catch(() => undefined)]).then(() => undefined);
-    return run;
+    return this._track(this._runBootstrap(source));
+  }
+
+  private _track(work: Promise<void>): Promise<void> {
+    const noop = () => undefined;
+    this._settling = this._settling.then(() => work).then(noop, noop);
+    return work;
   }
 
   private async _runBootstrap(source: MediaInput): Promise<void> {
@@ -450,6 +452,8 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     if (id !== this._bootstrapId || this._destroyed) return;
 
     this._dispatch("loadstart", {});
+    // A loadstart listener may have set another source, whose bootstrap now owns the element.
+    if (id !== this._bootstrapId || this._destroyed) return;
 
     const abort = new AbortController();
     this._bootAbort = abort;
@@ -1045,8 +1049,8 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     if (this._destroyed) return;
     this._releaseDocumentHooks();
     this._destroyed = true;
-    await this._teardown();
-    await this._booting;
+    await this._track(this._teardown());
+    await this._settling;
     this._dispatch("destroy", {});
   }
 

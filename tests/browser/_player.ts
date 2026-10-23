@@ -13,8 +13,24 @@ export type Player = HTMLElement & {
   currentTime: number;
   play(): Promise<void>;
   destroy(): Promise<void>;
-  getDiagnostics(): { runtime?: { framesPainted?: number } } | null;
+  getDiagnostics(): { videoCodec?: string; runtime?: { framesPainted?: number } } | null;
 };
+
+/** Opens the harness page the specs mount players on. */
+export async function openHarness(page: Page): Promise<void> {
+  await page.goto("/tests-harness.html");
+  await page.waitForFunction(() => (window as unknown as { __avbridgeReady?: boolean }).__avbridgeReady === true);
+}
+
+/** Mounts a player on `url` without waiting for it to open. */
+export async function attach(page: Page, url: string): Promise<void> {
+  await page.evaluate((src) => {
+    const el = document.createElement("avbridge-player") as Player;
+    el.muted = true;
+    document.getElementById("player-mount")!.appendChild(el);
+    el.src = src;
+  }, url);
+}
 
 /** Mounts a player on `url` and waits for ready. */
 export async function mount(page: Page, url: string): Promise<void> {
@@ -47,20 +63,18 @@ export async function playsFrames(page: Page): Promise<void> {
   await expect.poll(() => framesPainted(page), { timeout: 15_000 }).toBeGreaterThan(5);
 }
 
-/** Destroys and removes the player; resolves the ms destroy() took, or -1 past `limitMs`. */
-export async function close(page: Page, limitMs: number): Promise<number> {
+/** Destroys and removes the player; true when destroy() settled within `limitMs`. */
+export async function closesWithin(page: Page, limitMs: number): Promise<boolean> {
   return page.evaluate(async (limit) => {
     const el = document.querySelector("#player-mount avbridge-player") as Player;
-    const t0 = performance.now();
     const done = await Promise.race([
       el.destroy().then(() => true),
       new Promise<boolean>((r) => setTimeout(() => r(false), limit)),
     ]);
     el.remove();
-    return done ? performance.now() - t0 : -1;
+    return done;
   }, limitMs);
 }
-
 
 export interface Painted {
   width: number;

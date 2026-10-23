@@ -4,6 +4,30 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0-sv.3]
+
+### Fixed
+
+- **Remote AVI/WMV failed outright before Safari 17.4** (and older Chromium WebViews):
+  the HTTP reader combined signals with `AbortSignal.any`. It listens for the abort
+  instead.
+- **Closing a player could still wait on a stalled request.** The fallback and hybrid
+  sessions sniffed the URL again without the player's signal; they now pass its
+  transport, and an aborted bootstrap stops before trying the next strategy.
+- **Frames without a timestamp were labelled early after shed frames**, ahead of the
+  sound: the frame counter now advances over the frames it sheds. DV is shed like
+  Motion JPEG.
+- **destroy() after a disconnect** resolved before the player had been destroyed; a
+  `loadstart` listener that set another source left the first bootstrap running.
+- **A tap on the hidden play button** while loading, buffering or ended paused or
+  replayed the video; it takes taps only when shown.
+- The released instance's failed read no longer logs an error on every close.
+
+### Changed
+
+- Releases are cut only after CI (bundle audit and browser tests included) passes on
+  main, and carry the LGPL text in both libav folders.
+
 ## [2.13.0-sv.2]
 
 ### Fixed
@@ -25,7 +49,8 @@ asset, not on npm.
   read stuck in it; the HTTP reader aborts its fetch on detach.
 - **Every file after a played one trapped "memory access out of bounds".** Teardown
   freed packets and the mpeg4 bitstream filter with `av_packet_free`/`av_bsf_free`,
-  which take the pointer's address; it now uses the `_js` forms.
+  which take the pointer's address. Playback teardown now ends the decoder's own
+  instance instead of freeing piece by piece; remux and transcode use the `_js` forms.
 - **SD colours** (BT.601, nearly every AVI) were read as BT.709, and the **pixel aspect
   ratio** was ignored. The fallback decoder builds planar YUV `VideoFrame`s itself,
   tagged BT.601 below 720 lines, BT.709 from 720.

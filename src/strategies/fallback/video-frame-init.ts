@@ -30,21 +30,18 @@ export interface PlanarFrame {
   sample_aspect_ratio?: [number, number];
 }
 
-/** True when `videoFrameInit` can build this frame. */
-export function isPlanarYuv(frame: PlanarFrame): boolean {
-  return frame.format in PLANAR_YUV && !!frame.layout && !!frame.width && !!frame.height;
-}
-
-export function videoFrameInit(frame: PlanarFrame, timestamp: number): VideoFrameBufferInit {
-  const [format, fullRange] = PLANAR_YUV[frame.format];
-  const width = frame.width!;
-  const height = frame.height!;
+/** The init of this frame's `VideoFrame`, or null when it is not planar YUV (the bridge's). */
+export function videoFrameInit(frame: PlanarFrame, timestamp: number): VideoFrameBufferInit | null {
+  const planar = PLANAR_YUV[frame.format];
+  const { width, height, layout } = frame;
+  if (!planar || !layout || !width || !height) return null;
+  const [format, fullRange] = planar;
   const tag = fullRange || height < 720 ? "smpte170m" : "bt709";
   const init: VideoFrameBufferInit = {
     format,
     codedWidth: width,
     codedHeight: height,
-    layout: frame.layout,
+    layout,
     timestamp,
     colorSpace: { matrix: tag, primaries: tag, transfer: tag, fullRange },
   };

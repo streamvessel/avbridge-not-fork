@@ -3,11 +3,13 @@ name: Release
 # Builds the package and attaches it to a GitHub Release named after the
 # version in package.json, the first time main carries that version. This is
 # how StreamVessel consumes the fork: it installs the release asset by URL.
-# Nothing is published to npm.
+# Nothing is published to npm. It runs once CI (unit, bundle audit, browser
+# tests) has passed on the pushed commit, so it only builds and packs.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,9 +20,14 @@ concurrency:
 
 jobs:
   release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Version not yet released?
         id: version
@@ -42,16 +49,16 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Build, check and pack
+      - name: Build and pack
         if: steps.version.outputs.new == 'true'
         run: |
           npm ci
           npm run build
-          npm run typecheck
-          npm test
           npm pack
           # The libav binaries ship under the LGPL; a release without its text is refused.
-          tar tzf avbridge-*.tgz | grep -qx package/vendor/libav/avbridge/COPYING.LGPLv2.1
+          for variant in avbridge webcodecs; do
+            tar tzf avbridge-*.tgz | grep -qx "package/vendor/libav/$variant/COPYING.LGPLv2.1"
+          done
 
       - name: Create the release
         if: steps.version.outputs.new == 'true'
@@ -68,4 +75,4 @@ jobs:
             echo
             echo "SHA-256 \`$sha\`. Changes: see CHANGELOG.md."
           } > notes.md
-          gh release create "v$VERSION" "$file" --target "$GITHUB_SHA" --title "v$VERSION" --notes-file notes.md
+          gh release create "v$VERSION" "$file" --target "$SHA" --title "v$VERSION" --notes-file notes.md

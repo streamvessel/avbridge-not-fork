@@ -6,11 +6,11 @@
  * second of sound has been buffered since playback started, video is shed as that buffer runs
  * low:
  *
- * - Motion JPEG, where every frame is a keyframe, decodes every second frame below a second of
+ * - Motion JPEG and DV, where every frame is a keyframe, decodes every second frame below a second of
  *   sound and every third below half a second, and never decodes a frame already late.
  * - Other codecs skip to the next keyframe below half a second, or once a frame is half a second
  *   late. Skipping one of their frames freezes the picture until that keyframe, so they start
- *   later than Motion JPEG. A file whose frames never say keyframe stops being skipped after
+ *   later than Motion JPEG and DV. A file whose frames never say keyframe stops being skipped after
  *   12 s of them, rather than freezing for good.
  *
  * The buffer is empty by design just after a start or a seek, which is why nothing is shed until
@@ -30,13 +30,13 @@ export interface SheddablePacket {
   flags?: number;
 }
 
-export interface FrameShedderOptions {
-  /** True for codecs where every frame decodes on its own (Motion JPEG). */
+export interface FrameShedderOptions<T extends SheddablePacket> {
+  /** True for codecs where every frame decodes on its own (Motion JPEG, DV). */
   intraOnly: boolean;
   fps: number;
   clock: SheddingClock;
   /** The packet's presentation time in seconds, or null when it has none. */
-  ptsSec(pkt: SheddablePacket): number | null;
+  ptsSec(pkt: T): number | null;
 }
 
 const ARM_AT_SEC = 1;
@@ -46,7 +46,7 @@ const KEYLESS_LIMIT_SEC = 12;
 
 const isKey = (pkt: SheddablePacket) => ((pkt.flags ?? 0) & 1) === 1;
 
-export function createFrameShedder(opts: FrameShedderOptions): <T extends SheddablePacket>(pkts: T[]) => T[] {
+export function createFrameShedder<T extends SheddablePacket>(opts: FrameShedderOptions<T>): (pkts: T[]) => T[] {
   let armed = false;
   let skipped = 0;
   let keyless = false;

@@ -30,7 +30,7 @@ export async function probeWithLibav(
   // AVI/ASF/FLV demuxers are not in any libav.js npm variant — they live in
   // the custom "avbridge" build produced by `scripts/build-libav.sh`. The loader
   // emits an actionable error if the build hasn't been run yet. Threading
-  // is OFF by default (see the comment in libav-loader.ts for why).
+  // is OFF by default (see wantsThreads() in libav-loader.ts for why).
   //
   // An instance of the probe's own, released when it returns: a read that
   // never answers then ends with it rather than holding up the next file.
@@ -48,7 +48,6 @@ async function probeOn(
   sniffed: ContainerKind,
   transport: TransportConfig | undefined,
 ): Promise<MediaContext> {
-
   const filename = source.name ?? `input.${sniffed === "unknown" ? "bin" : sniffed}`;
   // For Blob/File sources we use libav's in-memory readahead file. For URL
   // sources we attach an HTTP block reader so libav demuxes via Range
@@ -111,9 +110,7 @@ async function probeOn(
   // for AVI; libav.js exposes it via the AVFormatContext duration helper.
   const duration = await safeDuration(libav, fmt_ctx!);
 
-  // Close the demuxer; the strategy will reopen it later if it ends up being
-  // chosen. Probing should not pin native resources.
-  await libav.avformat_close_input_js(fmt_ctx!).catch(() => {});
+  // The demuxer goes with the instance, released by the caller.
   await handle.detach().catch(() => {});
 
   return {
@@ -292,7 +289,6 @@ interface LibavInstance {
   ff_init_demuxer_file(name: string): Promise<[number, LibavStream[]]>;
   ff_copyout_codecpar(codecpar: number): Promise<LibavCodecpar>;
   avcodec_get_name(codec_id: number): Promise<string>;
-  avformat_close_input_js(ctx: number): Promise<void>;
   AVFormatContext_duration?(ctx: number): Promise<number>;
   AVFormatContext_durationhi?(ctx: number): Promise<number>;
   i64tof64?(lo: number, hi: number): number;

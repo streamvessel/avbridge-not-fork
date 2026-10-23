@@ -26,7 +26,7 @@
 import { createLibav, releaseLibav } from "./libav-loader.js";
 import { VideoRenderer } from "./video-renderer.js";
 import { createFrameShedder } from "./shed-frames.js";
-import { isPlanarYuv, videoFrameInit } from "./video-frame-init.js";
+import { videoFrameInit } from "./video-frame-init.js";
 import { AudioOutput } from "./audio-output.js";
 import type { MediaContext } from "../../types.js";
 import { dbg } from "../../util/debug.js";
@@ -79,6 +79,14 @@ export interface StartDecoderOptions {
  * fails. Shared, one stalled Range read held up every later file on the page.
  */
 export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHandles> {
+  // Fallback always does full software decode. The "webcodecs" libav
+  // variant is trimmed to demuxing + WebCodecs-companion use; it lacks
+  // software decoders for codecs whose browsers usually handle them
+  // (e.g. h265). When we've reached fallback for those codecs, it's
+  // precisely because the browser *can't* decode them — so we need
+  // the full "avbridge" variant with software decoders. pickLibavVariant
+  // is still right for the hybrid strategy (which software-decodes only
+  // audio and relies on WebCodecs for video), but not here.
   const libav = (await createLibav("avbridge")) as unknown as LibavRuntime;
   try {
     return await startDecoderOn(libav, opts);
@@ -89,14 +97,6 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
 }
 
 async function startDecoderOn(libav: LibavRuntime, opts: StartDecoderOptions): Promise<DecoderHandles> {
-  // Fallback always does full software decode. The "webcodecs" libav
-  // variant is trimmed to demuxing + WebCodecs-companion use; it lacks
-  // software decoders for codecs whose browsers usually handle them
-  // (e.g. h265). When we've reached fallback for those codecs, it's
-  // precisely because the browser *can't* decode them — so we need
-  // the full "avbridge" variant with software decoders. pickLibavVariant
-  // is still right for the hybrid strategy (which software-decodes only
-  // audio and relies on WebCodecs for video), but not here.
   const bridge = await loadBridge();
 
   // For URL sources, prepareLibavInput attaches an HTTP block reader so
@@ -352,11 +352,11 @@ async function startDecoderOn(libav: LibavRuntime, opts: StartDecoderOptions): P
   const videoTrackInfo = opts.context.videoTracks.find((t) => t.id === videoStream?.index);
   const videoFps = videoTrackInfo?.fps && videoTrackInfo.fps > 0 ? videoTrackInfo.fps : 30;
   const videoFrameStepUs = Math.max(1, Math.round(1_000_000 / videoFps));
-  const shedFrames = createFrameShedder({
-    intraOnly: videoTrackInfo?.codec === "mjpeg",
+  const shedFrames = createFrameShedder<LibavPacket>({
+    intraOnly: videoTrackInfo?.codec === "mjpeg" || videoTrackInfo?.codec === "dv",
     fps: videoFps,
     clock: opts.audio,
-    ptsSec: (pkt) => packetPtsSec(pkt as LibavPacket, videoTimeBase),
+    ptsSec: (pkt) => packetPtsSec(pkt, videoTimeBase),
   });
 
   // ── Pump loop ─────────────────────────────────────────────────────────
@@ -385,7 +385,8 @@ async function startDecoderOn(libav: LibavRuntime, opts: StartDecoderOptions): P
         readMsTotal += performance.now() - _readStart;
         readBatches++;
       } catch (err) {
-        console.error("[avbridge] ff_read_frame_multi failed:", err);
+        // destroy() releases the instance, which fails the read in flight: not an error.
+        if (!destroyed) console.error("[avbridge] ff_read_frame_multi failed:", err);
         return;
       }
 
@@ -472,7 +473,11 @@ async function startDecoderOn(libav: LibavRuntime, opts: StartDecoderOptions): P
       }
       if (myToken !== pumpToken || destroyed) return;
       if (videoDec && videoPackets && videoPackets.length > 0) {
-        const processed = shedFrames(await applyBSF(videoPackets));
+        const filtered = await applyBSF(videoPackets);
+        const processed = shedFrames(filtered);
+        // A shed frame still takes its place in time: a frame with no pts after it is labelled
+        // one step per frame from the last one decoded.
+        if (lastContentUs >= 0) lastContentUs += (filtered.length - processed.length) * videoFrameStepUs;
         if (processed.length > 0) await decodeVideoBatch(processed, myToken);
       }
 
@@ -799,8 +804,9 @@ async function startDecoderOn(libav: LibavRuntime, opts: StartDecoderOptions): P
         continue;
       }
       try {
-        const vf = isPlanarYuv(f)
-          ? new VideoFrame(f.data as BufferSource, videoFrameInit(f, _fPts))
+        const init = videoFrameInit(f, _fPts);
+        const vf = init
+          ? new VideoFrame(f.data as BufferSource, init)
           : bridge.laFrameToVideoFrame(f, { timeBase: [1, 1_000_000] });
         // Renderer-queue backpressure at the enqueue side. Discarding
         // here (rather than throttling the pump on `queueHighWater`)
@@ -1182,8 +1188,6 @@ interface LibavRuntime {
   ): Promise<LibavFrame[]>;
   ff_free_decoder?(c: number, pkt: number, frame: number): Promise<void>;
   av_packet_alloc(): Promise<number>;
-  /** Takes the packet; plain av_packet_free takes its address, as FFmpeg's does. */
-  av_packet_free_js(pkt: number): Promise<void>;
   av_seek_frame(
     fmt_ctx: number,
     stream: number,
@@ -1192,7 +1196,6 @@ interface LibavRuntime {
     flags: number,
   ): Promise<number>;
   avcodec_flush_buffers?(c: number): Promise<void>;
-  avformat_close_input_js(ctx: number): Promise<void>;
   /** Sync helper exposed by libav.js: split a JS number into (lo, hi) int64. */
   f64toi64?(val: number): [number, number];
 
@@ -1204,8 +1207,6 @@ interface LibavRuntime {
   av_bsf_send_packet(ctx: number, pkt: number): Promise<number>;
   av_bsf_receive_packet(ctx: number, pkt: number): Promise<number>;
   av_bsf_flush?(ctx: number): Promise<void>;
-  /** Takes the context; plain av_bsf_free takes its address. */
-  av_bsf_free_js(ctx: number): Promise<void>;
 
   // Packet copy helpers — bridge JS packet objects to/from C-level pointers
   ff_copyin_packet(pktPtr: number, packet: LibavPacket): Promise<void>;

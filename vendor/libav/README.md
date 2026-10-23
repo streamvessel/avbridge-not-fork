@@ -30,6 +30,17 @@ Motion JPEG with PCM or ADPCM sound is what cameras write (`MVI_*.AVI`). DV deco
 is 4:1:1, which no `VideoFrame` format takes, so a player should refuse it rather than play its
 sound over a black picture.
 
+Plus the parsers needed by each codec, plus `swscale` (video colorspace
+conversion) and `swresample` (audio resampling).
+
+The `mpeg4_unpack_bframes` BSF fixes the "packed B-frames" oddity in some
+DivX files where two frames are stored in one packet — without the BSF the
+decoder produces frames with fuzzy timing that the renderer drops as late.
+
+Output binary is roughly 10–15 MB. It is loaded **lazily** by avbridge — only
+when probe or classification routes a file to it. Users who only ever play
+modern MP4/MKV/WebM never download it.
+
 ## The committed build
 
 Built with this script from libav.js `v6.8.8.0` (commit `1b7a07d`), which builds FFmpeg 8.0 from
@@ -42,17 +53,6 @@ cores. SHA-256 of what is committed:
 
 A rebuild need not match these bytes (emscripten output is not reproducible bit for bit); it must
 pass the browser tests.
-
-Plus the parsers needed by each codec, plus `swscale` (video colorspace
-conversion) and `swresample` (audio resampling).
-
-The `mpeg4_unpack_bframes` BSF fixes the "packed B-frames" oddity in some
-DivX files where two frames are stored in one packet — without the BSF the
-decoder produces frames with fuzzy timing that the renderer drops as late.
-
-Output binary is roughly 10–15 MB. It is loaded **lazily** by avbridge — only
-when probe or classification routes a file to it. Users who only ever play
-modern MP4/MKV/WebM never download it.
 
 ## Compile flags
 
@@ -138,13 +138,15 @@ so Vite never pre-bundles it. The variant's `import.meta.url` resolves to
 libav.js is **LGPL-2.1**. If you ship a custom variant in a product, you
 must also distribute the corresponding source / build script. Keep
 `scripts/build-libav.sh` and the libav.js repo URL alongside any binaries
-you redistribute.
+you redistribute. `COPYING.LGPLv2.1` (FFmpeg's copy of the licence) sits beside
+the binaries, and the build copies it into `webcodecs/` too.
 
 ## Files in this directory after a successful build
 
 ```
 vendor/libav/
 ├── README.md                              ← this file
+├── COPYING.LGPLv2.1                        ← the LGPL-2.1 text
 ├── libav-avbridge.mjs                         ← entry point (loaded by avbridge)
 ├── libav-6.8.8.0-avbridge.wasm.mjs            ← WASM build factory
 ├── libav-6.8.8.0-avbridge.wasm.wasm           ← compiled binary

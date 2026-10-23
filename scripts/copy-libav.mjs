@@ -51,7 +51,7 @@ const vendorLibav = resolve(repoRoot, "vendor/libav");
 // Whitelist of filename patterns we actually ship. Everything else in the
 // upstream variant's dist/ (asm.js fallbacks for browsers that don't
 // support WASM, threaded `.thr.*` variants we don't use because libav.js
-// pthreads are unreliable — see libav-loader.ts) is excluded to keep the
+// pthreads are unreliable — see wantsThreads() in libav-loader.ts) is excluded to keep the
 // tarball under ~5 MB packed.
 const SHIPPED_FILENAME_PATTERNS = [
   /^libav-[a-z]+\.mjs$/,                          // entry ESM (libav-<variant>.mjs)
@@ -88,6 +88,9 @@ for (const v of npmVariants) {
     cpSync(from, join(dst, name));
     copied++;
   }
+  // The npm variant ships no licence text; the one committed beside our build goes with it.
+  const licence = join(vendorLibav, "avbridge", "COPYING.LGPLv2.1");
+  if (existsSync(licence)) cpSync(licence, join(dst, "COPYING.LGPLv2.1"));
   console.log(
     `[copy-libav] vendored ${v.name}: ${copied} file(s) → vendor/libav/${v.name}/ ` +
     `(skipped ${skipped} unused variants)`,
