@@ -4,6 +4,14 @@ All notable changes to **avbridge.js** are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0-sv.2]
+
+### Fixed
+
+- **The LGPL-2.1 text was missing from the package.** 2.13.0-sv.1 said it shipped
+  `vendor/libav/avbridge/COPYING.LGPLv2.1`, but that folder is ignored by git and the
+  file was never committed. It is now, beside the binary it licenses.
+
 ## [2.13.0-sv.1]
 
 StreamVessel's fork (streamvessel/avbridge) of 2.13.0. Released as a GitHub Release
