@@ -25,6 +25,8 @@
 
 import { loadLibav, type LibavVariant } from "./libav-loader.js";
 import { VideoRenderer } from "./video-renderer.js";
+import { createFrameShedder } from "./shed-frames.js";
+import { isPlanarYuv, videoFrameInit } from "./video-frame-init.js";
 import { AudioOutput } from "./audio-output.js";
 import type { MediaContext } from "../../types.js";
 import { pickLibavVariant } from "./variant-routing.js";
@@ -340,6 +342,12 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
   const videoTrackInfo = opts.context.videoTracks.find((t) => t.id === videoStream?.index);
   const videoFps = videoTrackInfo?.fps && videoTrackInfo.fps > 0 ? videoTrackInfo.fps : 30;
   const videoFrameStepUs = Math.max(1, Math.round(1_000_000 / videoFps));
+  const shedFrames = createFrameShedder({
+    intraOnly: videoTrackInfo?.codec === "mjpeg",
+    fps: videoFps,
+    clock: opts.audio,
+    ptsSec: (pkt) => packetPtsSec(pkt as LibavPacket, videoTimeBase),
+  });
 
   // ── Pump loop ─────────────────────────────────────────────────────────
 
@@ -454,8 +462,8 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       }
       if (myToken !== pumpToken || destroyed) return;
       if (videoDec && videoPackets && videoPackets.length > 0) {
-        const processed = await applyBSF(videoPackets);
-        await decodeVideoBatch(processed, myToken);
+        const processed = shedFrames(await applyBSF(videoPackets));
+        if (processed.length > 0) await decodeVideoBatch(processed, myToken);
       }
 
       packetsRead += (videoPackets?.length ?? 0) + (audioPackets?.length ?? 0);
@@ -781,7 +789,9 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
         continue;
       }
       try {
-        const vf = bridge.laFrameToVideoFrame(f, { timeBase: [1, 1_000_000] });
+        const vf = isPlanarYuv(f)
+          ? new VideoFrame(f.data as BufferSource, videoFrameInit(f, _fPts))
+          : bridge.laFrameToVideoFrame(f, { timeBase: [1, 1_000_000] });
         // Renderer-queue backpressure at the enqueue side. Discarding
         // here (rather than throttling the pump on `queueHighWater`)
         // keeps the decoder consuming packets sequentially so its
@@ -875,11 +885,11 @@ export async function startDecoder(opts: StartDecoderOptions): Promise<DecoderHa
       destroyed = true;
       pumpToken++;
       try { await pumpRunning; } catch { /* ignore */ }
-      try { if (bsfCtx) await libav.av_bsf_free(bsfCtx); } catch { /* ignore */ }
-      try { if (bsfPkt) await libav.av_packet_free?.(bsfPkt); } catch { /* ignore */ }
+      try { if (bsfCtx) await libav.av_bsf_free_js(bsfCtx); } catch { /* ignore */ }
+      try { if (bsfPkt) await libav.av_packet_free_js(bsfPkt); } catch { /* ignore */ }
       try { if (videoDec) await libav.ff_free_decoder?.(videoDec.c, videoDec.pkt, videoDec.frame); } catch { /* ignore */ }
       try { if (audioDec) await libav.ff_free_decoder?.(audioDec.c, audioDec.pkt, audioDec.frame); } catch { /* ignore */ }
-      try { await libav.av_packet_free?.(readPkt); } catch { /* ignore */ }
+      try { await libav.av_packet_free_js(readPkt); } catch { /* ignore */ }
       try { await libav.avformat_close_input_js(fmt_ctx); } catch { /* ignore */ }
       try { await inputHandle.detach(); } catch { /* ignore */ }
     },
@@ -1132,6 +1142,8 @@ interface LibavFrame {
   ptshi?: number;
   width?: number;
   height?: number;
+  layout?: PlaneLayout[];
+  sample_aspect_ratio?: [number, number];
 }
 
 interface LibavRuntime {
@@ -1162,7 +1174,8 @@ interface LibavRuntime {
   ): Promise<LibavFrame[]>;
   ff_free_decoder?(c: number, pkt: number, frame: number): Promise<void>;
   av_packet_alloc(): Promise<number>;
-  av_packet_free?(pkt: number): Promise<void>;
+  /** Takes the packet; plain av_packet_free takes its address, as FFmpeg's does. */
+  av_packet_free_js(pkt: number): Promise<void>;
   av_seek_frame(
     fmt_ctx: number,
     stream: number,
@@ -1183,7 +1196,8 @@ interface LibavRuntime {
   av_bsf_send_packet(ctx: number, pkt: number): Promise<number>;
   av_bsf_receive_packet(ctx: number, pkt: number): Promise<number>;
   av_bsf_flush?(ctx: number): Promise<void>;
-  av_bsf_free(ctx: number): Promise<void>;
+  /** Takes the context; plain av_bsf_free takes its address. */
+  av_bsf_free_js(ctx: number): Promise<void>;
 
   // Packet copy helpers — bridge JS packet objects to/from C-level pointers
   ff_copyin_packet(pktPtr: number, packet: LibavPacket): Promise<void>;
