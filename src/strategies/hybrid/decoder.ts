@@ -14,7 +14,7 @@
  * fallback/decoder.ts. The key difference is the video decode path.
  */
 
-import { loadLibav, type LibavVariant } from "../fallback/libav-loader.js";
+import { createLibav, releaseLibav } from "../fallback/libav-loader.js";
 import { VideoRenderer } from "../fallback/video-renderer.js";
 import { AudioOutput } from "../fallback/audio-output.js";
 import type { MediaContext } from "../../types.js";
@@ -56,9 +56,21 @@ export interface StartHybridDecoderOptions {
   transport?: import("../../types.js").TransportConfig;
 }
 
+/**
+ * Starts the decoder on a libav.js instance of its own, released by destroy() or by a start that
+ * fails. Shared, one stalled Range read held up every later file on the page.
+ */
 export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promise<HybridDecoderHandles> {
-  const variant: LibavVariant = pickLibavVariant(opts.context);
-  const libav = (await loadLibav(variant)) as unknown as LibavRuntime;
+  const libav = (await createLibav(pickLibavVariant(opts.context))) as unknown as LibavRuntime;
+  try {
+    return await startHybridDecoderOn(libav, opts);
+  } catch (err) {
+    releaseLibav(libav);
+    throw err;
+  }
+}
+
+async function startHybridDecoderOn(libav: LibavRuntime, opts: StartHybridDecoderOptions): Promise<HybridDecoderHandles> {
   const bridge = await loadBridge();
 
   // For URL sources, prepareLibavInput attaches an HTTP block reader so
@@ -451,14 +463,12 @@ export async function startHybridDecoder(opts: StartHybridDecoderOptions): Promi
     async destroy() {
       destroyed = true;
       pumpToken++;
+      // As in the fallback decoder: releasing this decoder's own instance frees all of it and
+      // ends a read the pump is stuck in.
+      void inputHandle.detach().catch(() => {});
+      releaseLibav(libav);
       try { await pumpRunning; } catch { /* ignore */ }
-      try { if (bsfCtx) await libav.av_bsf_free_js(bsfCtx); } catch { /* ignore */ }
-      try { if (bsfPkt) await libav.av_packet_free_js(bsfPkt); } catch { /* ignore */ }
       try { if (videoDecoder && videoDecoder.state !== "closed") videoDecoder.close(); } catch { /* ignore */ }
-      try { if (audioDec) await libav.ff_free_decoder?.(audioDec.c, audioDec.pkt, audioDec.frame); } catch { /* ignore */ }
-      try { await libav.av_packet_free_js(readPkt); } catch { /* ignore */ }
-      try { await libav.avformat_close_input_js(fmt_ctx); } catch { /* ignore */ }
-      try { await inputHandle.detach(); } catch { /* ignore */ }
     },
 
     async setAudioTrack(trackId, timeSec) {

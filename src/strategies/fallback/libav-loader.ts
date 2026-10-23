@@ -40,75 +40,109 @@ export interface LoadLibavOptions {
 // Cache key includes both variant and threading mode so probe and decode
 // can run different libav instances of the same variant.
 const cache: Map<string, Promise<LibavInstance>> = new Map();
+// The variant's module, imported once whatever number of instances it makes.
+const modules: Map<string, Promise<LoadedVariant>> = new Map();
 
 function cacheKey(variant: LibavVariant, threads: boolean): string {
   return `${variant}:${threads ? "thr" : "wasm"}`;
+}
+
+function wantsThreads(opts: LoadLibavOptions): boolean {
+  const env = globalThis as { AVBRIDGE_LIBAV_THREADS?: boolean };
+  return opts.threads !== undefined ? opts.threads : env.AVBRIDGE_LIBAV_THREADS === true;
 }
 
 /**
  * Load (and cache) a libav.js variant. Pass `"webcodecs"` for the small
  * default; pass `"default"` for the audio fallback; pass `"avbridge"` for the
  * custom build that supports AVI/WMV/legacy codecs.
+ *
+ * The instance is shared by every caller for the life of the page, and libav.js
+ * runs one call at a time on its worker: a call that never returns (a Range read
+ * whose response never arrives) holds up every later one. Playback therefore
+ * uses `createLibav()`; this stays for one-shot work (remux, transcode).
  */
 export function loadLibav(
   variant: LibavVariant = "webcodecs",
   opts: LoadLibavOptions = {},
 ): Promise<LibavInstance> {
-  // Threading is OFF by default. The threaded libav.js variant is too
-  // fragile in practice for our usage:
-  //   - Probe (`avformat_find_stream_info` for AVI) throws an `undefined`
-  //     exception out of `ff_init_demuxer_file`, apparently due to the
-  //     cross-thread reader-device protocol racing with the main thread.
-  //   - Decode hits a `TypeError: Cannot read properties of undefined
-  //     (reading 'apply')` inside libav.js's own worker message handler
-  //     within seconds of starting — a bug in libav.js's threaded message
-  //     dispatch that we can't fix from outside.
-  //
-  // Performance work for the fallback strategy needs to come from elsewhere
-  // (WASM SIMD, OffscreenCanvas, larger decode batches) instead of libav's
-  // pthreads. Threading can still be force-enabled with
-  // `globalThis.AVBRIDGE_LIBAV_THREADS = true` for testing if libav.js fixes
-  // those bugs in a future release.
-  const env = globalThis as { AVBRIDGE_LIBAV_THREADS?: boolean };
-  const wantThreads =
-    opts.threads !== undefined
-      ? opts.threads
-      : env.AVBRIDGE_LIBAV_THREADS === true;
-
+  const wantThreads = wantsThreads(opts);
   const key = cacheKey(variant, wantThreads);
   let entry = cache.get(key);
   if (!entry) {
-    entry = loadVariant(variant, wantThreads);
+    entry = createLibav(variant, opts);
+    entry.catch(() => cache.delete(key));
     cache.set(key, entry);
   }
   return entry;
 }
 
-async function loadVariant(
-  variant: LibavVariant,
-  wantThreads: boolean,
+/**
+ * A libav.js instance of its own: its own worker and heap, which nothing else
+ * can wedge or corrupt. The caller owns it and must `releaseLibav()` it, which
+ * is also how a call stuck on a read is ended. The module is imported once;
+ * each instance costs a worker and a WebAssembly instantiation.
+ */
+export function createLibav(
+  variant: LibavVariant = "webcodecs",
+  opts: LoadLibavOptions = {},
 ): Promise<LibavInstance> {
-  return dbg.timed("libav-load", `load "${variant}" (threads=${wantThreads})`, 5000, () =>
-    loadVariantInner(variant, wantThreads),
-  );
+  const wantThreads = wantsThreads(opts);
+  return dbg.timed("libav-load", `load "${variant}" (threads=${wantThreads})`, 5000, async () => {
+    const { mod, base } = await loadModule(variant);
+    try {
+      const inst = (await mod.LibAV(buildOpts(base, wantThreads))) as LibavInstance;
+      await silenceLibavLogs(inst);
+      return inst;
+    } catch (err) {
+      throw chain(`LibAV() factory failed for "${variant}" variant (threads=${wantThreads})`, err);
+    }
+  });
 }
 
-async function loadVariantInner(
-  variant: LibavVariant,
-  wantThreads: boolean,
-): Promise<LibavInstance> {
-  const key = cacheKey(variant, wantThreads);
+/**
+ * Ends an instance from `createLibav()`: terminates its worker, fails every
+ * call still waiting on it (a pending read included, so whatever awaited it
+ * moves on) and every call made after. Safe to call twice.
+ */
+export function releaseLibav(libav: unknown): void {
+  const inst = libav as {
+    terminate?: () => void;
+    handlers?: Record<string, [unknown, (err: unknown) => void]>;
+    c?: (...args: unknown[]) => Promise<unknown>;
+    onblockread?: unknown;
+    onread?: unknown;
+  };
+  if (!inst || (inst as { __released?: boolean }).__released) return;
+  (inst as { __released?: boolean }).__released = true;
+  try { inst.terminate?.(); } catch { /* ignore */ }
+  const released = () => Promise.reject(new Error("libav released"));
+  // Every method of a worker-backed instance posts through `c`.
+  inst.c = released;
+  for (const [id, handler] of Object.entries(inst.handlers ?? {})) {
+    if (!/^\d+$/.test(id)) continue;
+    try { handler[1](new Error("libav released")); } catch { /* ignore */ }
+    delete inst.handlers![id];
+  }
+  inst.onblockread = undefined;
+  inst.onread = undefined;
+}
+
+function loadModule(variant: LibavVariant): Promise<{ mod: LoadedVariant; base: string }> {
   const base = `${libavBaseUrl()}/${variant}`;
-  // The custom variant is named `libav-avbridge.mjs`; the npm variants follow
-  // the same convention (`libav-webcodecs.mjs`, `libav-default.mjs`).
   const variantUrl = `${base}/libav-${variant}.mjs`;
+  let entry = modules.get(variantUrl);
+  if (!entry) {
+    entry = importVariant(variant, base, variantUrl);
+    entry.catch(() => modules.delete(variantUrl));
+    modules.set(variantUrl, entry);
+  }
+  return entry.then((mod) => ({ mod, base }));
+}
+
+async function importVariant(variant: LibavVariant, base: string, variantUrl: string): Promise<LoadedVariant> {
   dbg.info("libav-load", `fetching ${variantUrl}`);
 
-  // Preflight HEAD-ish check: issue a bytes=0-0 range request so a missing
-  // file fails fast with a clear error instead of hanging deep inside the
-  // dynamic import or inside libav's own WASM instantiation. Surfaces the
-  // most common mistake ("libav base path is wrong") in <100 ms instead of
-  // an indeterminate stall.
   if (typeof fetch === "function") {
     try {
       const head = await fetch(variantUrl, { method: "GET", headers: { Range: "bytes=0-0" } });
@@ -118,10 +152,8 @@ async function loadVariantInner(
           `at ${base}/ (override via globalThis.AVBRIDGE_LIBAV_BASE)`,
         );
       }
-      // Drain the tiny response so the connection can be reused.
       try { await head.arrayBuffer(); } catch { /* ignore */ }
     } catch (err) {
-      cache.delete(key);
       throw chain(
         `libav.js "${variant}" variant not reachable at ${variantUrl}`,
         err,
@@ -129,16 +161,13 @@ async function loadVariantInner(
     }
   }
 
-  let mod: LoadedVariant;
   try {
-    // @ts-ignore runtime URL
     const imported: unknown = await import(/* @vite-ignore */ variantUrl);
     if (!imported || typeof (imported as { LibAV?: unknown }).LibAV !== "function") {
       throw new Error(`module at ${variantUrl} did not export LibAV`);
     }
-    mod = imported as LoadedVariant;
+    return imported as LoadedVariant;
   } catch (err) {
-    cache.delete(key);
     const hint =
       variant === "avbridge"
         ? `The "avbridge" variant is a custom local build. Run \`./scripts/build-libav.sh\` ` +
@@ -149,15 +178,6 @@ async function loadVariantInner(
       `failed to load libav.js "${variant}" variant from ${variantUrl}. ${hint} ` +
         `Original error: ${(err as Error).message || String(err)}`,
     );
-  }
-
-  try {
-    const inst = (await mod.LibAV(buildOpts(base, wantThreads))) as LibavInstance;
-    await silenceLibavLogs(inst);
-    return inst;
-  } catch (err) {
-    cache.delete(key);
-    throw chain(`LibAV() factory failed for "${variant}" variant (threads=${wantThreads})`, err);
   }
 }
 

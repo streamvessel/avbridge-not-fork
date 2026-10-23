@@ -8,7 +8,7 @@ import type {
 } from "../types.js";
 import type { NormalizedSource } from "../util/source.js";
 import { prepareLibavInput, type LibavInputHandle } from "../util/libav-http-reader.js";
-import { loadLibav } from "../strategies/fallback/libav-loader.js";
+import { createLibav, releaseLibav } from "../strategies/fallback/libav-loader.js";
 
 /**
  * Probe AVI/ASF/FLV (and any other format mediabunny doesn't speak) via
@@ -28,8 +28,23 @@ export async function probeWithLibav(
   // AVI/ASF/FLV demuxers are not in any libav.js npm variant — they live in
   // the custom "avbridge" build produced by `scripts/build-libav.sh`. The loader
   // emits an actionable error if the build hasn't been run yet. Threading
-  // is OFF by default in `loadLibav` (see the comment there for why).
-  const libav = (await loadLibav("avbridge")) as unknown as LibavInstance;
+  // is OFF by default (see the comment in libav-loader.ts for why).
+  //
+  // An instance of the probe's own, released when it returns: a read that
+  // never answers then ends with it rather than holding up the next file.
+  const libav = (await createLibav("avbridge")) as unknown as LibavInstance;
+  try {
+    return await probeOn(libav, source, sniffed);
+  } finally {
+    releaseLibav(libav);
+  }
+}
+
+async function probeOn(
+  libav: LibavInstance,
+  source: NormalizedSource,
+  sniffed: ContainerKind,
+): Promise<MediaContext> {
 
   const filename = source.name ?? `input.${sniffed === "unknown" ? "bin" : sniffed}`;
   // For Blob/File sources we use libav's in-memory readahead file. For URL
