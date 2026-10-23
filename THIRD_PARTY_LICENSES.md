@@ -18,11 +18,10 @@ libswscale) for WebAssembly. These binaries live in
 - FFmpeg legal notice: https://ffmpeg.org/legal.html
 - License: **GNU Lesser General Public License version 2.1 or later**
 
-The full LGPL-2.1 license text is available at
-https://www.gnu.org/licenses/old-licenses/lgpl-2.1.en.html and is
-incorporated by reference. avbridge ships this text as a hyperlink rather
-than a copy to keep the tarball size reasonable; the text is short, stable,
-and universally accessible.
+The full LGPL-2.1 license text ships beside the binary, as
+`vendor/libav/avbridge/COPYING.LGPLv2.1` (FFmpeg's own copy), so an app that
+serves that folder serves the licence with it. It is also at
+https://www.gnu.org/licenses/old-licenses/lgpl-2.1.en.html.
 
 ### Your obligations if you redistribute avbridge
 
