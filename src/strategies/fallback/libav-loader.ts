@@ -92,6 +92,7 @@ export function createLibav(
     const { mod, base } = await loadModule(variant);
     try {
       const inst = (await mod.LibAV(buildOpts(base, wantThreads))) as LibavInstance;
+      trackCalls(inst);
       await silenceLibavLogs(inst);
       return inst;
     } catch (err) {
@@ -100,32 +101,48 @@ export function createLibav(
   });
 }
 
+/** Fails the calls an instance still has in flight; see trackCalls. */
+const inFlight = new WeakMap<object, Set<(err: Error) => void>>();
+
 /**
- * Ends an instance from `createLibav()`: terminates its worker, fails every
+ * Wraps the one function every libav.js method posts through (`c`, in the worker and the
+ * threaded wrappers alike) to keep each call's rejecter, so releaseLibav can fail them. libav.js
+ * keeps its own pending handlers where nothing outside can reach them in threaded mode.
+ */
+/** @internal Exported for unit tests. */
+export function trackCalls(libav: unknown): void {
+  const inst = libav as { c?: (...args: unknown[]) => Promise<unknown> };
+  const call = inst.c;
+  if (typeof call !== "function") return;
+  const pending = new Set<(err: Error) => void>();
+  inFlight.set(inst, pending);
+  inst.c = (...args: unknown[]) => new Promise((resolve, reject) => {
+    pending.add(reject);
+    call.apply(inst, args).then(
+      (value) => { pending.delete(reject); resolve(value); },
+      (err) => { pending.delete(reject); reject(err); },
+    );
+  });
+}
+
+/**
+ * Ends an instance from `createLibav()`: terminates its workers, fails every
  * call still waiting on it (a pending read included, so whatever awaited it
  * moves on) and every call made after. Safe to call twice.
  */
 export function releaseLibav(libav: unknown): void {
   const inst = libav as {
     terminate?: () => void;
-    handlers?: Record<string, [unknown, (err: unknown) => void]>;
     c?: (...args: unknown[]) => Promise<unknown>;
-    onblockread?: unknown;
-    onread?: unknown;
+    __released?: boolean;
   };
-  if (!inst || (inst as { __released?: boolean }).__released) return;
-  (inst as { __released?: boolean }).__released = true;
+  if (!inst || inst.__released) return;
+  inst.__released = true;
+  const released = () => new Error("libav released");
+  inst.c = () => Promise.reject(released());
   try { inst.terminate?.(); } catch { /* ignore */ }
-  const released = () => Promise.reject(new Error("libav released"));
-  // Every method of a worker-backed instance posts through `c`.
-  inst.c = released;
-  for (const [id, handler] of Object.entries(inst.handlers ?? {})) {
-    if (!/^\d+$/.test(id)) continue;
-    try { handler[1](new Error("libav released")); } catch { /* ignore */ }
-    delete inst.handlers![id];
-  }
-  inst.onblockread = undefined;
-  inst.onread = undefined;
+  for (const fail of inFlight.get(inst) ?? []) fail(released());
+  inFlight.delete(inst);
 }
 
 function loadModule(variant: LibavVariant): Promise<{ mod: LoadedVariant; base: string }> {

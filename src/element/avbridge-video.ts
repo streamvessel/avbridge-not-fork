@@ -424,12 +424,18 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   // ── Bootstrap (the only place a UnifiedPlayer is created) ──────────────
 
-  /** Settles when the bootstrap in flight has finished, a player it made after destroy included. */
+  /** Settles when every bootstrap started has finished, a player one made after destroy included. */
   private _booting: Promise<void> = Promise.resolve();
+  /**
+   * Aborts every request of the current bootstrap and of the player it makes: the sniff, the
+   * probe's reads and the decoder's. Teardown fires it, so a bootstrap stalled on the network
+   * (a Range read that never answers) fails out instead of keeping destroy() waiting.
+   */
+  private _bootAbort: AbortController | null = null;
 
   private _bootstrap(source: MediaInput): Promise<void> {
     const run = this._runBootstrap(source);
-    this._booting = run.catch(() => undefined);
+    this._booting = Promise.all([this._booting, run.catch(() => undefined)]).then(() => undefined);
     return run;
   }
 
@@ -445,11 +451,15 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
     this._dispatch("loadstart", {});
 
+    const abort = new AbortController();
+    this._bootAbort = abort;
+
     let player: UnifiedPlayer;
     try {
       player = await createPlayer({
         source,
         target: this._videoEl,
+        requestInit: { signal: abort.signal },
         // Honor the consumer's preferred initial strategy. "auto" means
         // "let the classifier decide" — the createPlayer call simply doesn't
         // pass initialStrategy in that case.
@@ -555,6 +565,9 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
       // _bootstrap() call passes its own ID and we skip the bump.
       this._bootstrapId++;
     }
+    // Ends the requests of a bootstrap still in flight and of the player leaving.
+    this._bootAbort?.abort();
+    this._bootAbort = null;
     const player = this._player;
     this._player = null;
     this._strategy = null;

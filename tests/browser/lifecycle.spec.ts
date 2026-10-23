@@ -45,6 +45,27 @@ test("a stalled read stops neither the next video nor the stalled one later", as
   await playsFrames(page);
 });
 
+test("a file whose reads stall while it opens can still be closed, and the next one plays", async ({ page }) => {
+  // The first read sizes the file; none after it is ever answered, so the probe never finishes.
+  const stalled: Route[] = [];
+  let reads = 0;
+  await page.route(`**/${LONG}`, (route) => (reads++ === 0 ? route.continue() : void stalled.push(route)));
+  await page.evaluate((src) => {
+    const el = document.createElement("avbridge-player") as Player;
+    el.muted = true;
+    document.getElementById("player-mount")!.appendChild(el);
+    el.src = src;
+  }, fixture(LONG));
+  await expect.poll(() => stalled.length, { timeout: 10_000 }).toBeGreaterThan(0);
+
+  expect(await close(page, 5_000), "destroy() should not wait on a stalled open").toBeGreaterThanOrEqual(0);
+
+  await mount(page, fixture(CAMERA));
+  await playsFrames(page);
+  await page.unroute(`**/${LONG}`);
+  await Promise.all(stalled.map((r) => r.abort().catch(() => undefined)));
+});
+
 test("plays after many players opened and closed, some before they were ready", async ({ page }) => {
   const files = [LONG, CAMERA, "bbb-h264-mp3.avi", CAMERA];
   for (let round = 0; round < 8; round++) {

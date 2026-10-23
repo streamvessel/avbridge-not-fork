@@ -3,6 +3,7 @@ import type {
   AudioTrackInfo,
   ContainerKind,
   MediaContext,
+  TransportConfig,
   VideoCodec,
   VideoTrackInfo,
 } from "../types.js";
@@ -24,6 +25,7 @@ import { createLibav, releaseLibav } from "../strategies/fallback/libav-loader.j
 export async function probeWithLibav(
   source: NormalizedSource,
   sniffed: ContainerKind,
+  transport?: TransportConfig,
 ): Promise<MediaContext> {
   // AVI/ASF/FLV demuxers are not in any libav.js npm variant — they live in
   // the custom "avbridge" build produced by `scripts/build-libav.sh`. The loader
@@ -34,7 +36,7 @@ export async function probeWithLibav(
   // never answers then ends with it rather than holding up the next file.
   const libav = (await createLibav("avbridge")) as unknown as LibavInstance;
   try {
-    return await probeOn(libav, source, sniffed);
+    return await probeOn(libav, source, sniffed, transport);
   } finally {
     releaseLibav(libav);
   }
@@ -44,13 +46,14 @@ async function probeOn(
   libav: LibavInstance,
   source: NormalizedSource,
   sniffed: ContainerKind,
+  transport: TransportConfig | undefined,
 ): Promise<MediaContext> {
 
   const filename = source.name ?? `input.${sniffed === "unknown" ? "bin" : sniffed}`;
   // For Blob/File sources we use libav's in-memory readahead file. For URL
   // sources we attach an HTTP block reader so libav demuxes via Range
   // requests instead of buffering the whole file.
-  const handle: LibavInputHandle = await prepareLibavInput(libav as unknown as Parameters<typeof prepareLibavInput>[0], filename, source);
+  const handle: LibavInputHandle = await prepareLibavInput(libav as unknown as Parameters<typeof prepareLibavInput>[0], filename, source, transport);
 
   let fmt_ctx: number | undefined;
   let streams: LibavStream[] = [];
