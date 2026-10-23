@@ -101,6 +101,11 @@ export const PLAYER_STYLES = /* css */ `
   transform: scale(1);
 }
 
+/* Unseen while playing, so a tap there showed nothing and paused the video. */
+:host([data-state="playing"]) .avp-overlay-btn {
+  pointer-events: none;
+}
+
 /* ── Loading spinner ──────────────────────────────────────────────────── */
 
 .avp-spinner {

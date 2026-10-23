@@ -272,6 +272,20 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   disconnectedCallback(): void {
     if (this._destroyed) return;
+    this._releaseDocumentHooks();
+    // Bump the bootstrap token so any in-flight async work is invalidated
+    // before we tear down. _teardown() also bumps but we want the bump to
+    // happen synchronously here so any awaited promise that resolves
+    // between `disconnect` and `_teardown` sees the new ID.
+    this._bootstrapId++;
+    void this._teardown();
+  }
+
+  /**
+   * Undoes what connecting set up on the document. Shared by disconnect and destroy(), because
+   * disconnect does nothing once destroyed: a destroy() then remove() leaked the listener.
+   */
+  private _releaseDocumentHooks(): void {
     if (this._trackObserver) {
       this._trackObserver.disconnect();
       this._trackObserver = null;
@@ -283,12 +297,6 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
     // If we were fullscreen via some ancestor and got disconnected, release
     // any orientation lock we had taken.
     this._releaseOrientationLock();
-    // Bump the bootstrap token so any in-flight async work is invalidated
-    // before we tear down. _teardown() also bumps but we want the bump to
-    // happen synchronously here so any awaited promise that resolves
-    // between `disconnect` and `_teardown` sees the new ID.
-    this._bootstrapId++;
-    void this._teardown();
   }
 
   attributeChangedCallback(name: string, _oldValue: string | null, newValue: string | null): void {
@@ -416,7 +424,16 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   // ── Bootstrap (the only place a UnifiedPlayer is created) ──────────────
 
-  private async _bootstrap(source: MediaInput): Promise<void> {
+  /** Settles when the bootstrap in flight has finished, a player it made after destroy included. */
+  private _booting: Promise<void> = Promise.resolve();
+
+  private _bootstrap(source: MediaInput): Promise<void> {
+    const run = this._runBootstrap(source);
+    this._booting = run.catch(() => undefined);
+    return run;
+  }
+
+  private async _runBootstrap(source: MediaInput): Promise<void> {
     if (this._destroyed) return;
     const id = ++this._bootstrapId;
 
@@ -1007,12 +1024,16 @@ export class AvbridgeVideoElement extends HTMLElementCtor {
 
   /**
    * Tear down the element permanently. After destroy(), the element ignores
-   * all method calls and attribute changes.
+   * all method calls and attribute changes. Resolves once nothing of this
+   * element still runs: the player, and a bootstrap in flight with any
+   * player it made.
    */
   async destroy(): Promise<void> {
     if (this._destroyed) return;
+    this._releaseDocumentHooks();
     this._destroyed = true;
     await this._teardown();
+    await this._booting;
     this._dispatch("destroy", {});
   }
 
