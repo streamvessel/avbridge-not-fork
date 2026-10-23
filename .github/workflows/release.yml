@@ -50,6 +50,8 @@ jobs:
           npm run typecheck
           npm test
           npm pack
+          # The libav binaries ship under the LGPL; a release without its text is refused.
+          tar tzf avbridge-*.tgz | grep -qx package/vendor/libav/avbridge/COPYING.LGPLv2.1
 
       - name: Create the release
         if: steps.version.outputs.new == 'true'

@@ -58,6 +58,7 @@ const SHIPPED_FILENAME_PATTERNS = [
   /^libav-[0-9.]+-[a-z]+\.wasm\.mjs$/,            // non-threaded WASM glue
   /^libav-[0-9.]+-[a-z]+\.wasm\.wasm$/,           // non-threaded WASM binary
   /^libav\.types\.d\.ts$/,                        // type defs (small)
+  /^COPYING\.LGPLv2\.1$/,                         // the LGPL text the binaries ship under
 ];
 
 function shouldShip(filename) {
