@@ -51,7 +51,7 @@ the Library") by:
    relinking avbridge.
 
 If you need a literal source tarball rather than a build script, please
-open an issue at https://github.com/keishi/avbridge/issues and it will be
+open an issue at https://github.com/streamvessel/avbridge/issues and it will be
 provided.
 
 ### mediabunny — MPL-2.0
