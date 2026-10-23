@@ -352,6 +352,9 @@ async function startDecoderOn(libav: LibavRuntime, opts: StartDecoderOptions): P
   const videoTrackInfo = opts.context.videoTracks.find((t) => t.id === videoStream?.index);
   const videoFps = videoTrackInfo?.fps && videoTrackInfo.fps > 0 ? videoTrackInfo.fps : 30;
   const videoFrameStepUs = Math.max(1, Math.round(1_000_000 / videoFps));
+  // The step a frame with no pts takes from the one before it: one frame, or more where frames
+  // were shed from its batch.
+  let nopStepUs = videoFrameStepUs;
   const shedFrames = createFrameShedder<LibavPacket>({
     intraOnly: videoTrackInfo?.codec === "mjpeg" || videoTrackInfo?.codec === "dv",
     fps: videoFps,
@@ -475,10 +478,12 @@ async function startDecoderOn(libav: LibavRuntime, opts: StartDecoderOptions): P
       if (videoDec && videoPackets && videoPackets.length > 0) {
         const filtered = await applyBSF(videoPackets);
         const processed = shedFrames(filtered);
-        // A shed frame still takes its place in time: a frame with no pts after it is labelled
-        // one step per frame from the last one decoded.
-        if (lastContentUs >= 0) lastContentUs += (filtered.length - processed.length) * videoFrameStepUs;
+        // A shed frame still takes its place in time: a decoded frame with no pts steps over its
+        // share of the frames shed from its batch, spread across the batch rather than lumped
+        // before its first frame.
+        nopStepUs = processed.length > 0 ? videoFrameStepUs * filtered.length / processed.length : videoFrameStepUs;
         if (processed.length > 0) await decodeVideoBatch(processed, myToken);
+        nopStepUs = videoFrameStepUs;
       }
 
       packetsRead += (videoPackets?.length ?? 0) + (audioPackets?.length ?? 0);
@@ -748,7 +753,7 @@ async function startDecoderOn(libav: LibavRuntime, opts: StartDecoderOptions): P
         if (rawUs != null) {
           lastContentUs = rawUs; // sync to truth on every valid pts
         } else {
-          lastContentUs += videoFrameStepUs; // extend from last truth
+          lastContentUs += Math.round(nopStepUs); // extend from last truth
           _diagSanFallbackFired = true;
         }
       }
