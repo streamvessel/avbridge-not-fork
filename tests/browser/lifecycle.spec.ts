@@ -10,13 +10,12 @@
  * one included, until a reload. Each probe and decoder now has an instance of
  * its own, released when it is done.
  */
-import { test, expect, type Page, type Route } from "@playwright/test";
-import { resolve } from "node:path";
+import { test, expect, type Route } from "@playwright/test";
+import { close, fixture, mount, player, playsFrames, type Player } from "./_player.js";
 
 test.skip(({ browserName }) => browserName !== "chromium", "lifecycle, not strategy");
 test.setTimeout(90_000);
 
-const fixture = (name: string) => `/@fs${resolve("tests/fixtures", name)}`;
 const LONG = "bbb-mpeg4-mp3.avi"; // 30 s, read in many Range requests as it plays
 const CAMERA = "mjpeg-pcm.avi";
 
@@ -24,61 +23,6 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/tests-harness.html");
   await page.waitForFunction(() => (window as unknown as { __avbridgeReady?: boolean }).__avbridgeReady === true);
 });
-
-type Player = HTMLElement & {
-  src: string;
-  muted: boolean;
-  currentTime: number;
-  play(): Promise<void>;
-  destroy(): Promise<void>;
-  getDiagnostics(): { runtime?: { framesPainted?: number } } | null;
-};
-
-/** Mounts a player on `url` and waits for ready. */
-async function mount(page: Page, url: string): Promise<void> {
-  await page.evaluate(async (src) => {
-    const mount = document.getElementById("player-mount")!;
-    const player = document.createElement("avbridge-player") as Player;
-    player.muted = true;
-    mount.appendChild(player);
-    await new Promise<void>((ok, fail) => {
-      const timer = setTimeout(() => fail(new Error("ready timeout")), 20_000);
-      player.addEventListener("ready", () => { clearTimeout(timer); ok(); }, { once: true });
-      player.addEventListener("error", (e) => {
-        clearTimeout(timer);
-        fail((e as unknown as CustomEvent).detail?.error ?? new Error("error event"));
-      }, { once: true });
-      player.src = src;
-    });
-  }, url);
-}
-
-const player = (page: Page) => page.locator("#player-mount avbridge-player");
-
-async function framesPainted(page: Page): Promise<number> {
-  return player(page).evaluate((el) => (el as Player).getDiagnostics()?.runtime?.framesPainted ?? 0);
-}
-
-/** Plays and waits until the player has painted frames. */
-async function playsFrames(page: Page): Promise<void> {
-  await player(page).evaluate((el) => (el as Player).play());
-  await expect.poll(() => framesPainted(page), { timeout: 15_000 }).toBeGreaterThan(5);
-}
-
-/** Destroys and removes the player; resolves the ms destroy() took, or -1 past `limitMs`. */
-async function close(page: Page, limitMs: number): Promise<number> {
-  return page.evaluate(async (limit) => {
-    const el = document.querySelector("#player-mount avbridge-player") as Player;
-    const t0 = performance.now();
-    const done = await Promise.race([
-      el.destroy().then(() => true),
-      new Promise<boolean>((r) => setTimeout(() => r(false), limit)),
-    ]);
-    el.remove();
-    return done ? performance.now() - t0 : -1;
-  }, limitMs);
-}
-
 test("a stalled read stops neither the next video nor the stalled one later", async ({ page }) => {
   await mount(page, fixture(LONG));
   await playsFrames(page);
